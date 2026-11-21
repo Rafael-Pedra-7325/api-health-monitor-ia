@@ -1,3 +1,4 @@
+[![Live Demo](https://img.shields.io/badge/Live_Demo-Streamlit-FF4B4B?style=for-the-badge&logo=streamlit&logoColor=white)](https://api-health-monitor-ia.streamlit.app/)
 # 📡 API Health Monitor + IA
 
 Monitor de disponibilidade e latência de APIs REST construído em **Python**, **SQL (SQLite)** e **Streamlit**, com diagnóstico automático de incidentes utilizando **IA Generativa (Gemini REST API)**.
