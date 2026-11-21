@@ -2,7 +2,7 @@ import os
 import requests
 import streamlit as st
 
-GEMINI_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
+BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
 
 
 def _obter_api_key(chave_manual: str = "") -> str:
@@ -11,6 +11,27 @@ def _obter_api_key(chave_manual: str = "") -> str:
     if "GEMINI_API_KEY" in st.secrets:
         return str(st.secrets["GEMINI_API_KEY"]).strip()
     return os.getenv("GEMINI_API_KEY", "").strip()
+
+
+def _listar_modelos_disponiveis(api_key: str) -> list[str]:
+    """Consulta o catálogo da API para descobrir modelos Flash ativos."""
+    modelos_padrao = ["models/gemini-flash-latest", "models/gemini-2.5-flash", "models/gemini-2.0-flash"]
+    try:
+        resp = requests.get(f"{BASE_URL}/models?key={api_key}", timeout=8)
+        if resp.status_code == 200:
+            dados = resp.json().get("models", [])
+            descobertos = [
+                m["name"]
+                for m in dados
+                if "generateContent" in m.get("supportedGenerationMethods", [])
+                and "flash" in m.get("name", "").lower()
+                and not any(x in m["name"].lower() for x in ["image", "audio", "tts", "live", "embedding"])
+            ]
+            if descobertos:
+                return descobertos
+    except Exception:
+        pass
+    return modelos_padrao
 
 
 def _diagnostico_fallback(status_code: int, latencia_ms: float, detalhe_erro: str) -> str:
@@ -54,28 +75,30 @@ def gerar_diagnostico_ia(
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {
             "temperature": 0.2,
-            "maxOutputTokens": 500,
-            "thinkingConfig": {"thinkingBudget": 0},
+            "maxOutputTokens": 800,
         },
     }
 
-    try:
-        resp = requests.post(
-            f"{GEMINI_ENDPOINT}?key={api_key}",
-            json=payload,
-            headers={"Content-Type": "application/json"},
-            timeout=15,
-        )
-        if resp.status_code != 200:
-            return _diagnostico_fallback(status_code, latencia_ms, resposta_trecho), f"Fallback Local (HTTP {resp.status_code})"
+    modelos = _listar_modelos_disponiveis(api_key)
+    ultimo_status = "erro de rede"
 
-        data = resp.json()
-        partes = data.get("candidates", [{}])[0].get("content", {}).get("parts", [])
-        texto = "".join(p.get("text", "") for p in partes).strip()
+    for modelo in modelos[:3]:
+        try:
+            resp = requests.post(
+                f"{BASE_URL}/{modelo}:generateContent?key={api_key}",
+                json=payload,
+                headers={"Content-Type": "application/json"},
+                timeout=15,
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                partes = data.get("candidates", [{}])[0].get("content", {}).get("parts", [])
+                texto = "".join(p.get("text", "") for p in partes).strip()
+                if texto:
+                    nome_limpo = modelo.replace("models/", "")
+                    return texto, f"{nome_limpo} (API REST)"
+            ultimo_status = f"HTTP {resp.status_code}"
+        except Exception as exc:
+            ultimo_status = type(exc).__name__
 
-        if not texto:
-            return _diagnostico_fallback(status_code, latencia_ms, resposta_trecho), "Fallback Local (resposta vazia)"
-
-        return texto, "Gemini 2.5 Flash (API REST)"
-    except Exception as exc:
-        return _diagnostico_fallback(status_code, latencia_ms, resposta_trecho), f"Fallback Local ({type(exc).__name__})"
+    return _diagnostico_fallback(status_code, latencia_ms, resposta_trecho), f"Fallback Local ({ultimo_status})"
