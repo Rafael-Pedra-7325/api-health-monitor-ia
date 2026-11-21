@@ -9,8 +9,8 @@ def _obter_api_key(chave_manual: str = "") -> str:
     if chave_manual.strip():
         return chave_manual.strip()
     if "GEMINI_API_KEY" in st.secrets:
-        return st.secrets["GEMINI_API_KEY"]
-    return os.getenv("GEMINI_API_KEY", "")
+        return str(st.secrets["GEMINI_API_KEY"]).strip()
+    return os.getenv("GEMINI_API_KEY", "").strip()
 
 
 def _diagnostico_fallback(status_code: int, latencia_ms: float, detalhe_erro: str) -> str:
@@ -52,7 +52,11 @@ def gerar_diagnostico_ia(
 
     payload = {
         "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {"temperature": 0.2, "maxOutputTokens": 180},
+        "generationConfig": {
+            "temperature": 0.2,
+            "maxOutputTokens": 500,
+            "thinkingConfig": {"thinkingBudget": 0},
+        },
     }
 
     try:
@@ -60,11 +64,18 @@ def gerar_diagnostico_ia(
             f"{GEMINI_ENDPOINT}?key={api_key}",
             json=payload,
             headers={"Content-Type": "application/json"},
-            timeout=10,
+            timeout=15,
         )
-        resp.raise_for_status()
+        if resp.status_code != 200:
+            return _diagnostico_fallback(status_code, latencia_ms, resposta_trecho), f"Fallback Local (HTTP {resp.status_code})"
+
         data = resp.json()
-        texto = data["candidates"][0]["content"]["parts"][0]["text"].strip()
+        partes = data.get("candidates", [{}])[0].get("content", {}).get("parts", [])
+        texto = "".join(p.get("text", "") for p in partes).strip()
+
+        if not texto:
+            return _diagnostico_fallback(status_code, latencia_ms, resposta_trecho), "Fallback Local (resposta vazia)"
+
         return texto, "Gemini 2.5 Flash (API REST)"
-    except Exception:
-        return _diagnostico_fallback(status_code, latencia_ms, resposta_trecho), "Fallback Local (timeout/erro na API)"
+    except Exception as exc:
+        return _diagnostico_fallback(status_code, latencia_ms, resposta_trecho), f"Fallback Local ({type(exc).__name__})"
